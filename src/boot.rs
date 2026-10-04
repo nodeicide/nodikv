@@ -15,7 +15,6 @@ fn id_path() -> PathBuf {
 
 fn load_or_create_secret_key(path: &PathBuf) -> anyhow::Result<SecretKey> {
     if path.exists() {
-        
         let hex = std::fs::read_to_string(path)?;
         Ok(SecretKey::from_str(hex.trim())?)
     } else {
@@ -48,15 +47,11 @@ async fn main() -> anyhow::Result<()> {
         .bind()
         .await?;
 
-    
-    
     endpoint.online().await;
 
     let id = endpoint.id();
     println!("> our endpoint id: {id}");
 
-    
-    
     let id_file = id_path();
     std::fs::write(&id_file, id.to_string())?;
     println!("> id written to: {}", id_file.display());
@@ -68,9 +63,6 @@ async fn main() -> anyhow::Result<()> {
 
     let topic_id = TopicId::from_bytes([0u8; 32]);
 
-    
-    
-    
     println!("> waiting for a peer to connect...");
     let (_sender, mut receiver) = gossip.subscribe_and_join(topic_id, vec![]).await?.split();
     println!("> connected!");

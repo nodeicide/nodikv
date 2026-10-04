@@ -9,30 +9,13 @@ use iroh_gossip::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    io::{self, BufRead, Write},
-    sync::{Arc, Mutex},
+    io::{self, BufRead},
+};
+use std::{
+    io::{self, Write},
     thread,
 };
 use tokio::runtime::Handle;
-
-type Db = Arc<Mutex<HashMap<String, String>>>;
-
-fn apply_command(line: &str, db: &Db) -> String {
-    let parts: Vec<&str> = line.trim().splitn(3, ' ').collect();
-    match parts.as_slice() {
-        ["PUSH", key, value] => {
-            db.lock()
-                .unwrap()
-                .insert(key.to_string(), value.to_string());
-            "OK".to_string()
-        }
-        ["PULL", key] => match db.lock().unwrap().get(*key) {
-            Some(v) => v.clone(),
-            None => "NOT FOUND".to_string(),
-        },
-        _ => "ERR unknown command".to_string(),
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Message {
@@ -83,27 +66,19 @@ async fn main() -> Result<()> {
 
     let my_id: PublicKey = endpoint.id();
 
-    let db: Db = Arc::new(Mutex::new(HashMap::new()));
-
     let handle = Handle::current();
-    let command_db = db.clone();
-    thread::spawn(move || handle.block_on(command_loop(my_id, sender, command_db)));
+    thread::spawn(move || handle.block_on(message_loop(my_id, sender)));
 
-    let receive_db = db.clone();
     tokio::spawn(async move {
         while let Some(event) = receiver.try_next().await.unwrap() {
             match event {
                 Event::Received(msg) => match Message::from_bytes(&msg.content) {
-                    Ok(decoded) => {
-                        let response = apply_command(&decoded.text, &receive_db);
-                        println!(
-                            "> {} (relayed via {}): {} -> {}",
-                            decoded.from.fmt_short(),
-                            msg.delivered_from.fmt_short(),
-                            decoded.text,
-                            response,
-                        );
-                    }
+                    Ok(decoded) => println!(
+                        "> {} (relayed via {}): {}",
+                        decoded.from.fmt_short(),
+                        msg.delivered_from.fmt_short(),
+                        decoded.text,
+                    ),
                     Err(_) => println!(
                         "> {}: <could not decode message>",
                         msg.delivered_from.fmt_short()
@@ -115,6 +90,30 @@ async fn main() -> Result<()> {
             }
         }
     });
+    loop {
+        let mut db: HashMap<String, String> = HashMap::new();
+        let stdin = io::stdin();
+
+        for line in stdin.lock().lines() {
+            let line = line.unwrap();
+            let parts: Vec<&str> = line.trim().splitn(3, ' ').collect();
+
+            match parts.as_slice() {
+                ["PUSH", key, value] => {
+                    db.insert(key.to_string(), value.to_string());
+                    println!("OK");
+                }
+                ["PULL", key] => match db.get(*key) {
+                    Some(v) => println!("{}", v),
+                    None => println!("NOT FOUND"),
+                },
+                _ => println!("ERR unknown command"),
+            }
+        }
+    }
+}
+
+
 
     tokio::signal::ctrl_c().await?;
     router.shutdown().await?;
@@ -131,21 +130,15 @@ async fn send_message(sender: &GossipSender, id: PublicKey, text: &str) -> Resul
     Ok(())
 }
 
-async fn command_loop(id: PublicKey, sender: GossipSender, db: Db) -> Result<()> {
+async fn message_loop(id: PublicKey, sender: GossipSender) -> Result<()> {
     loop {
-        print!("Command -> ");
+        print!("Message -> ");
         io::stdout().flush()?;
-        let line = match io::stdin().lock().lines().next() {
+        let line = match io::stdin().lines().next() {
             Some(line) => line?,
             None => break,
         };
-
-        let response = apply_command(&line, &db);
-        println!("{response}");
-
-        if line.trim().starts_with("PUSH ") {
-            send_message(&sender, id, &line).await?;
-        }
+        send_message(&sender, id, &line).await?;
     }
     Ok(())
 }
